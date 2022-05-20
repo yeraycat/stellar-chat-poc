@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stellar Chat Proof of Concept</title>
+</head>
+<body>
+    <main>
+        <div class="chatroom-info"></div>
+        <div id="chatroom-messages" class="chatroom-messages" style="max-width: 60%; margin: auto;">
+            
+        </div>
+        <div class="send-message-form" style="display: flex; flex-direction: column; justify-content: center;align-items: center;">
+            <textarea id="send-message-textbox" maxlength="64" style="min-width: 260px; width: 60%;padding: 8px;margin: 12px;"></textarea>
+            <input id="private-key" name="private-key" type="password" />
+            <button onclick="sendMessage()">Send</button>
+            <div id="errors"></div>
+        </div>
+    </main>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stellar-sdk/10.1.1/stellar-sdk.js"></script>
+    <script>
+        const {Server, TransactionBuilder, Networks, BASE_FEE, Keypair, Operation, Asset, StrKey } = StellarSdk;
+        const chatroomId = "GASE7KOZEMGB3UZTQBVULRIHN7AE4A4BLOCWTY3PUM6ED5BXINKXTPFF";
+
+        const server = new Server('https://horizon-testnet.stellar.org');
+
+        function shortStellarAddress(address) {
+            return `${address.substring(0, 5)}...${address.substring(51, 56)}`;
+        }
+
+        async function getUsers() {
+            const chatroomAccount = await server.loadAccount(chatroomId);
+            return Object.keys(chatroomAccount.data_attr);
+        }
+
+        async function getMessages() {
+            const users = await getUsers();
+            let messages = [];
+            for (let user of users) {
+                const latestOperations = await server.operations().forAccount(user).order("desc").limit(200).call()
+                const messageOperations = latestOperations.records.filter(o => o.type === "manage_data").filter(o => o.name === chatroomId)
+                messages = [...messages, ...messageOperations.map(o => ({user: shortStellarAddress(user), message: atob(o.value), when: new Date(o.created_at)}))];
+            }
+            return messages.sort((a, b) => b.when - a.when);
+        }
+
+        function renderMessages(messages) {
+            const chatroomMessages = document.querySelector("#chatroom-messages");
+            chatroomMessages.innerHTML = "";
+            messages.map(message => {
+                const messageView = document.createElement("div");
+                messageView.innerText = `${message.when.toLocaleString()} - ${message.user}: ${message.message}`;
+                return messageView;
+            }).forEach(message => chatroomMessages.appendChild(message));
+        }
+
+        async function joinRoom() {
+            const errorsView = document.querySelector("#errors");
+            const privateKeyTextbox = document.querySelector("#private-key");
+            const sendMessageTextbox = document.querySelector("#send-message-textbox");
+            const privateKey = privateKeyTextbox.value;
+            errorsView.innerHTML = "";
+            if (!privateKey) {
+                errorsView.innerHTML = "Please add your private key, it won't leave your browser, I can't access it (check the code if you don't trust)";
+            } else {
+                const keypair = Keypair.fromSecret(privateKey);
+                const account = await server.loadAccount(keypair.publicKey());
+                const tx = new TransactionBuilder(account, {fee: BASE_FEE, networkPassphrase: StellarSdk.Networks.TESTNET })
+                .addOperation(Operation.payment({
+                    destination: chatroomId,
+                    amount: "1",
+                    asset: Asset.native()
+                }))
+                .setTimeout(30).build();
+                tx.sign(keypair);
+                try {
+                    server.submitTransaction(tx);
+                } catch(error) {
+                    errorsView.innerHTML = "Error when joining room. Check if you have funds"
+                }   
+            }
+        }
+
+        async function sendMessage() {
+            const errorsView = document.querySelector("#errors");
+            const privateKeyTextbox = document.querySelector("#private-key");
+            const sendMessageTextbox = document.querySelector("#send-message-textbox");
+            const privateKey = privateKeyTextbox.value;
+            errorsView.innerHTML = "";
+            if (!privateKey) {
+                errorsView.innerHTML = "Please add your private key, it won't leave your browser, I can't access it (check the code if you don't trust)";
+            } else {
+                const keypair = Keypair.fromSecret(privateKey);
+                if(!(await getUsers()).includes(keypair.publicKey())) {
+                    errorsView.innerHTML = `
+                        You're not a user of this chatroom. To join you have to send 1 XLM to ${chatroomId} <button onclick="joinRoom()">Join room</button>
+                    `;
+                } else {
+                    const account = await server.loadAccount(keypair.publicKey());
+                    const tx = new TransactionBuilder(account, {fee: BASE_FEE, networkPassphrase: StellarSdk.Networks.TESTNET })
+                    .addOperation(Operation.manageData({
+                        name: chatroomId,
+                        value: sendMessageTextbox.value,
+                    }))
+                    .setTimeout(30).build();
+                    tx.sign(keypair);
+                    try {
+                        server.submitTransaction(tx);
+                        renderMessages(await getMessages());
+                        sendMessageTextbox.value = "";
+                    } catch(error) {
+                        errorsView.innerHTML = "Error when sending message.";
+                    } 
+                }
+            }
+        }
+
+        let refreshInterval;
+
+        async function main() {
+            const messages = await getMessages();
+            renderMessages(messages);
+            refreshInterval = setInterval(() => {
+                console.info("Getting messages...");
+                getMessages().then(messages => renderMessages(messages));
+            }, 5000);
+        }
+
+        main();
+    </script>
+</body>
+</html>
