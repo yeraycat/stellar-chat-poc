@@ -28,3 +28,4 @@ It is set to run on testnet, but it is quite easy to change this in the code.
 ## Improvements to be done
 
 - Extend messages length to 6400 characters by using the 100 operations in a single transaction (each 64 characters is an overwrite over the data entry, so each 64 characters there's a fee increase) and then joining them back to build a message.
+- Add code for "server". Node reading event stream coming from horizon to add users through manage_data operations to the chatroom when the payment is received.
